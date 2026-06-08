@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.IO.Ports;
@@ -15,6 +15,7 @@ namespace TrionicCANLib.CAN
     public class CANELM327Device : ICANDevice
     {
         bool m_deviceIsOpen = false;
+        private volatile bool m_sessionDropped = false;
         SerialPort m_serialPort = new SerialPort();
         Thread m_readThread;
         Object m_synchObject = new Object();
@@ -151,17 +152,18 @@ namespace TrionicCANLib.CAN
                             foreach (var rxMessage in lines)
                             {
                                 if (rxMessage.StartsWith("STOPPED")) { isStopped = true; }
-                                else if (rxMessage.StartsWith("NO DATA")) { } //skip it
+                                else if (rxMessage.StartsWith("NO DATA"))
+                                {
+                                    m_sessionDropped = true;
+                                    Flush();
+                                    logger.Debug("NO DATA received - session marked as dropped.");
+                                }
                                 else if (rxMessage.StartsWith("CAN ERROR"))
                                 {
                                     //handle error?
                                 }
                                 else if (rxMessage.StartsWith("ELM")) { isStopped = false; } //skip it, this is a trick to stop ELM from listening to more messages and send ready char
                                 else if (rxMessage.StartsWith("?")) { isStopped = false; }
-                                else if (rxMessage.StartsWith("NO DATA"))
-                                {
-                                    logger.Debug("NO DATA");
-                                }
                                 else if (rxMessage.Length == 19) // is it a valid line
                                 {
                                     try
@@ -234,6 +236,11 @@ namespace TrionicCANLib.CAN
 
         protected override bool sendMessageDevice(CANMessage a_message)
         {
+            if (m_sessionDropped)
+            {
+                m_sessionDropped = false;
+                throw new TrionicCANLib.KWP.KWPSessionDroppedException("KWP session dropped by ECU (NO DATA)");
+            }
             lock (lockObj)
             {
                 sendDataSempahore.WaitOne(timeoutWithoutReadyChar);

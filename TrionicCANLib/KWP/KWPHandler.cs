@@ -18,6 +18,11 @@ namespace TrionicCANLib.KWP
         DeviceNotConnected
     }
 
+    public class KWPSessionDroppedException : Exception
+    {
+        public KWPSessionDroppedException(string message) : base(message) { }
+    }
+
     /// <summary>
     /// KWPHandler implements messages for the KWP2000 (Key Word Protocol 2000) protocol (also called
     /// ISO 14230-4). Not all messages are implemented.
@@ -30,6 +35,7 @@ namespace TrionicCANLib.KWP
         private static IKWPDevice m_kwpDevice;
 
         private bool gotSequrityAccess = false;
+        private bool m_inRenegotiation = false;
         private int keepAliveTimeout = 1000;
         private static KWPHandler m_instance;
         private Mutex m_requestMutex = new Mutex();
@@ -1182,28 +1188,65 @@ namespace TrionicCANLib.KWP
                 stateTimer.Change(keepAliveTimeout, keepAliveTimeout);
             }
 
-            m_requestMutex.WaitOne();
-
-            logger.Trace(a_request.ToString());
-            for (int retry = 0; retry < 3; retry++)
+            try
             {
-                result = m_kwpDevice.sendRequest(a_request, out reply);
-                a_reply = reply;
-                if (result == RequestResult.NoError)
-                {
-                    logger.Trace(reply.ToString());
-                    logger.Trace(""); // empty line
+                m_requestMutex.WaitOne();
 
-                    m_requestMutex.ReleaseMutex();
-                    return KWPResult.OK;
-                }
-                else
+                logger.Trace(a_request.ToString());
+                for (int retry = 0; retry < 3; retry++)
                 {
-                    logger.Trace("Error in KWPHandler::sendRequest: " + result.ToString() + " " + retry.ToString());
-                    logger.Debug("Error in KWPHandler::sendRequest: " + result.ToString() + " " + retry.ToString());
+                    result = m_kwpDevice.sendRequest(a_request, out reply);
+                    a_reply = reply;
+                    if (result == RequestResult.NoError)
+                    {
+                        logger.Trace(reply.ToString());
+                        logger.Trace(""); // empty line
+
+                        m_requestMutex.ReleaseMutex();
+                        return KWPResult.OK;
+                    }
+                    else
+                    {
+                        logger.Trace("Error in KWPHandler::sendRequest: " + result.ToString() + " " + retry.ToString());
+                        logger.Debug("Error in KWPHandler::sendRequest: " + result.ToString() + " " + retry.ToString());
+                    }
+                }
+                m_requestMutex.ReleaseMutex();
+            }
+            catch (KWPSessionDroppedException ex)
+            {
+                m_requestMutex.ReleaseMutex();
+                if (m_inRenegotiation)
+                {
+                    throw;
+                }
+
+                logger.Warn("KWP session dropped: " + ex.Message + ". Attempting renegotiation...");
+                m_inRenegotiation = true;
+                try
+                {
+                    if (startSession())
+                    {
+                        logger.Info("KWP session successfully restarted. Requesting security access...");
+                        if (requestSequrityAccess(true))
+                        {
+                            logger.Info("Security access re-granted.");
+                            m_requestMutex.WaitOne();
+                            result = m_kwpDevice.sendRequest(a_request, out reply);
+                            a_reply = reply;
+                            m_requestMutex.ReleaseMutex();
+                            if (result == RequestResult.NoError)
+                            {
+                                return KWPResult.OK;
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    m_inRenegotiation = false;
                 }
             }
-            m_requestMutex.ReleaseMutex();
             return KWPResult.Timeout;
         }
 
@@ -1232,35 +1275,70 @@ namespace TrionicCANLib.KWP
                 stateTimer.Change(keepAliveTimeout, keepAliveTimeout);
             }
 
-            m_requestMutex.WaitOne();
-            int _retryCount = 0;
-            result = RequestResult.Unknown; // <GS-11022010>
-            while (_retryCount < _maxSendRetries && result != RequestResult.NoError)
+            try
             {
-                logger.Trace(a_request.ToString());
-                result = m_kwpDevice.sendRequest(a_request, out reply);
-                if ((int)reply.getLength() != expectedLength)
+                m_requestMutex.WaitOne();
+                int _retryCount = 0;
+                result = RequestResult.Unknown; // <GS-11022010>
+                while (_retryCount < _maxSendRetries && result != RequestResult.NoError)
                 {
-                    result = RequestResult.InvalidLength;
-                    
+                    logger.Trace(a_request.ToString());
+                    result = m_kwpDevice.sendRequest(a_request, out reply);
+                    if ((int)reply.getLength() != expectedLength)
+                    {
+                        result = RequestResult.InvalidLength;
+                    }
+                    if (result == RequestResult.NoError)
+                    {
+                        a_reply = reply;
+                        logger.Trace(reply.ToString());
+                        logger.Trace(""); // empty line
+                        m_requestMutex.ReleaseMutex();
+                        _kwpResult = KWPResult.OK;
+                    }
+                    else
+                    {
+                        logger.Trace("Error in KWPHandler::sendRequest" + result.ToString() + " " + reply.ToString());
+                        m_requestMutex.ReleaseMutex();
+                        _kwpResult = KWPResult.Timeout;
+                    }
+                    _retryCount++;
                 }
-                if (result == RequestResult.NoError)
+            }
+            catch (KWPSessionDroppedException ex)
+            {
+                m_requestMutex.ReleaseMutex();
+                if (m_inRenegotiation)
                 {
-             
-                    a_reply = reply;
-                    logger.Trace(reply.ToString());
-                    logger.Trace(""); // empty line
-                    m_requestMutex.ReleaseMutex();
-                    //return KWPResult.OK;
-                    _kwpResult = KWPResult.OK;
+                    throw;
                 }
-                else
+
+                logger.Warn("KWP session dropped: " + ex.Message + ". Attempting renegotiation...");
+                m_inRenegotiation = true;
+                try
                 {
-                    logger.Trace("Error in KWPHandler::sendRequest" + result.ToString() + " " + reply.ToString());
-                    m_requestMutex.ReleaseMutex();
-                    //return KWPResult.Timeout;
-                    _kwpResult = KWPResult.Timeout;
+                    if (startSession())
+                    {
+                        logger.Info("KWP session successfully restarted. Requesting security access...");
+                        if (requestSequrityAccess(true))
+                        {
+                            logger.Info("Security access re-granted.");
+                            m_requestMutex.WaitOne();
+                            result = m_kwpDevice.sendRequest(a_request, out reply);
+                            a_reply = reply;
+                            m_requestMutex.ReleaseMutex();
+                            if (result == RequestResult.NoError)
+                            {
+                                return KWPResult.OK;
+                            }
+                        }
+                    }
                 }
+                finally
+                {
+                    m_inRenegotiation = false;
+                }
+                _kwpResult = KWPResult.Timeout;
             }
             return _kwpResult;
         }
