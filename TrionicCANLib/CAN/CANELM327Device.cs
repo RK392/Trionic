@@ -464,6 +464,9 @@ namespace TrionicCANLib.CAN
                     answer = WriteToSerialAndWait("ATAT2\r");  //aggresive timing adoption, should reduce time wasted for not coming response
                     answer = WriteToSerialAndWait("ATCAF0\r");   //Can formatting OFF (custom generated PCI byte - SingleFrame, FirstFrame, ConsecutiveFrame, FlowControl)
                     logger.Debug("OPEN: ATCAF0 response:" + answer);
+                    
+                    answer = WriteToSerialAndWait("ATAL\r");   //Allow long messages (8 data bytes) to bypass ATSP6 ISO-TP limits
+                    logger.Debug("OPEN: ATAL response:" + answer);
 
                     if (TrionicECU == ECU.TRIONIC5 || (TrionicECU == ECU.TRIONIC7 && !UseOnlyPBus))
                     {
@@ -472,7 +475,7 @@ namespace TrionicCANLib.CAN
                     }
 
                     answer = WriteToSerialAndWait("0102030405060708 0\r", 1,">"); //check if device supports 8bytes + response count
-                    supports8ByteResponse = (answer != null);
+                    supports8ByteResponse = (answer != null && !answer.Contains("?"));
 
 
                     receiveData = true;
@@ -847,7 +850,7 @@ namespace TrionicCANLib.CAN
             var oldState = receiveData;
             receiveData = false;
 
-            WriteToSerialAndWait(msg,2,"OK\r\r>"); //this should handle the response
+            WriteToSerialAndWait(msg,2,">"); //this should handle the response
 
             if (oldState)
                 receiveData = true;

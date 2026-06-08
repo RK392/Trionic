@@ -107,6 +107,10 @@ namespace TrionicCANLib.KWP
         /// <returns>true on success, otherwise false.</returns>
         public bool startSession()
         {
+            if (stateTimer == null)
+            {
+                stateTimer = new System.Threading.Timer(sendKeepAlive, new Object(), keepAliveTimeout, keepAliveTimeout);
+            }
             return m_kwpDevice.startSession();
         }
 
