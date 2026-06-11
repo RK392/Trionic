@@ -36,7 +36,7 @@ namespace TrionicCANLib.KWP
 
         private bool gotSequrityAccess = false;
         private bool m_inRenegotiation = false;
-        private int keepAliveTimeout = 1000;
+        private int keepAliveTimeout = 5000;
         private static KWPHandler m_instance;
         private Mutex m_requestMutex = new Mutex();
         private TimerCallback timerDelegate;
